@@ -6,17 +6,19 @@ name: Python PR Coverage Report
 # artifacts, calculates PR-scoped + overall coverage, updates the PR description,
 # and enforces configurable thresholds.
 #
-# Scripts (pr_coverage.py, update-pr-ci-reports.js) are fetched directly from
-# this shared-workflows repo — no scripts need to exist in the calling repo.
+# Scripts live in this same repo (src/python, src/common), checked out into .github-workflow/.
+# Repository slug is fixed below (same as the reusable workflow’s home). Forks: change it there.
+# Uses the job’s default GITHUB_TOKEN when that repo is public. If it is private, add checkout
+# `token:` with a PAT that has Contents: Read — do not reuse SSH deploy keys (one repo only).
 #
 # Caller example:
 #   jobs:
 #     pr-coverage:
 #       needs: [test, allure-report]   # add allure-report if using Allure
 #       if: github.event_name == 'pull_request'
-#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-pr-coverage.yml@main
+#       uses: AHG-Technologies/github-workflow/.github/workflows/python-pr-coverage.yml@main
 #       with:
-#         ci-marker: 'voiceai-reports'          # unique per repo → unique HTML comment block
+#         ci-marker: 'my-service-reports'       # unique per repo → unique HTML comment block
 #         pr-coverage-threshold: 90
 #         overall-coverage-threshold: 45
 #         allure-report-artifact: 'allure-report'   # omit if not using Allure
@@ -29,9 +31,9 @@ on:
         description: >
           Unique identifier used in the HTML comment delimiters written to the PR body.
           Use a different value per repo so each repo has its own independent block
-          (e.g. "voiceai-reports", "telephony-middleware-reports").
+          (e.g. "api-reports", "worker-reports").
         type: string
-        default: 'ahg-reports'
+        default: 'pr-ci-reports'
       pr-coverage-threshold:
         description: 'Minimum coverage % required for PR-changed files (0 = disabled)'
         type: number
@@ -52,8 +54,8 @@ on:
         description: 'Python version used to run pr_coverage.py'
         type: string
         default: '3.12'
-      shared-workflows-ref:
-        description: 'Branch/tag of shared-workflows to use for scripts'
+      workflow-scripts-ref:
+        description: 'Branch or tag of github-workflow to fetch src/ scripts from'
         type: string
         default: 'main'
 
@@ -71,15 +73,12 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
 
-      # Fetch the shared scripts via SSH (same key used for greylog).
-      # The scripts live in this repo so callers never need their own copies.
-      - name: Checkout shared-workflows (scripts only)
+      - name: Checkout workflow scripts
         uses: actions/checkout@v4
         with:
-          repository: AHG-Technologies/shared-workflows
-          ref: ${{ inputs.shared-workflows-ref }}
-          path: .shared-workflows
-          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          repository: AHG-Technologies/github-workflow
+          ref: ${{ inputs.workflow-scripts-ref }}
+          path: .github-workflow
 
       - name: Download coverage artifact
         uses: actions/download-artifact@v4
@@ -109,7 +108,7 @@ jobs:
         id: pr_metrics
         env:
           PR_FILES: ${{ steps.pr_files.outputs.files }}
-        run: python3 .shared-workflows/src/python/pr_coverage.py
+        run: python3 .github-workflow/src/python/pr_coverage.py
 
       - name: Extract overall coverage
         id: overall
@@ -134,7 +133,7 @@ jobs:
           script: |
             const path = require('path');
             const { run } = require(
-              path.join(process.env.GITHUB_WORKSPACE, '.shared-workflows/src/common/update-pr-ci-reports.js')
+              path.join(process.env.GITHUB_WORKSPACE, '.github-workflow/src/common/update-pr-ci-reports.js')
             );
             await run({ github, context, core });
 

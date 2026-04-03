@@ -16,9 +16,9 @@ name: Python Coverage Badge
 #     coverage-badge:
 #       needs: test
 #       if: github.event_name == 'push'
-#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-coverage-badge.yml@main
+#       uses: YOUR_ORG/YOUR_WORKFLOWS_REPO/.github/workflows/python-coverage-badge.yml@main
 #       with:
-#         gist-filename: 'voiceai-coverage.json'   # unique per repo
+#         gist-filename: 'my-service-coverage.json'   # unique per repo
 #       secrets: inherit
 
 on:
@@ -32,7 +32,7 @@ on:
         description: >
           Filename inside the Gist to update.
           Use a unique name per repo so one Gist can host multiple badges.
-          e.g. "voiceai-coverage.json", "telephony-coverage.json"
+          e.g. "api-coverage.json", "worker-coverage.json"
         type: string
         default: 'coverage.json'
       label:

@@ -18,7 +18,7 @@ name: Notify Google Chat on PR Merge
 #   jobs:
 #     notify:
 #       if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
-#       uses: AHG-Technologies/shared-workflows/.github/workflows/notify-gchat-on-merge.yml@main
+#       uses: YOUR_ORG/YOUR_WORKFLOWS_REPO/.github/workflows/notify-gchat-on-merge.yml@main
 #       secrets: inherit
 
 on:

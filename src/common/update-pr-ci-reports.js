@@ -6,7 +6,7 @@
  * across every repo without modification:
  *
  *   CI_MARKER          — unique identifier for the HTML comment delimiters
- *                        (e.g. "voiceai-reports" or "telephony-middleware-reports")
+ *                        (e.g. "api-reports" or "worker-reports")
  *                        Keeps multiple repos' blocks independent in the PR body.
  *   OVERALL_THRESHOLD  — overall coverage gate % (used for display only; enforcement
  *                        is done by the shell step in the workflow)
@@ -21,7 +21,7 @@ const path = require("path");
 
 // ── Configuration from env ────────────────────────────────────────────────────
 
-const CI_MARKER        = process.env.CI_MARKER        || "ahg-reports";
+const CI_MARKER        = process.env.CI_MARKER        || "pr-ci-reports";
 const OVERALL_THRESHOLD = parseInt(process.env.OVERALL_THRESHOLD || "45",  10);
 const PR_THRESHOLD      = parseInt(process.env.PR_THRESHOLD      || "90",  10);
 

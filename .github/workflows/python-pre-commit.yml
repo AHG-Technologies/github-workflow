@@ -5,9 +5,10 @@ name: Python Pre-commit Checks
 # Caller example:
 #   jobs:
 #     pre-commit:
-#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-pre-commit.yml@main
+#       uses: YOUR_ORG/YOUR_WORKFLOWS_REPO/.github/workflows/python-pre-commit.yml@main
 #       with:
 #         python-version: '3.12'
+#         private-dependency-git-url: 'git@github.com:YOUR_ORG/private-lib.git'   # optional
 #       secrets: inherit
 
 on:
@@ -21,14 +22,18 @@ on:
         description: 'uv version to install'
         type: string
         default: '0.5.1'
-      clone-greylog:
-        description: 'Whether to clone the private greylog dependency before installing'
-        type: boolean
-        default: true
-      greylog-branch:
-        description: 'Branch of greylog to clone'
+      private-dependency-git-url:
+        description: 'SSH clone URL for an optional private dependency (empty = skip clone)'
+        type: string
+        default: ''
+      private-dependency-ref:
+        description: 'Branch or tag to check out for the private dependency'
         type: string
         default: 'main'
+      private-dependency-directory:
+        description: 'Directory name next to the caller repo (sibling folder) where the dependency is cloned'
+        type: string
+        default: 'private-dependency'
 
 permissions:
   contents: read
@@ -47,24 +52,28 @@ jobs:
           python-version: ${{ inputs.python-version }}
 
       - name: Setup SSH key for private repos
-        if: inputs.clone-greylog
+        if: inputs.private-dependency-git-url != ''
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Clone greylog repository
-        if: inputs.clone-greylog
+      - name: Clone private dependency (optional)
+        if: inputs.private-dependency-git-url != ''
+        env:
+          DEP_URL: ${{ inputs.private-dependency-git-url }}
+          DEP_REF: ${{ inputs.private-dependency-ref }}
+          DEP_DIR: ${{ inputs.private-dependency-directory }}
         run: |
           cd ..
-          if [ ! -d "greylog" ]; then
-            git clone -b ${{ inputs.greylog-branch }} git@github.com:AHG-Technologies/greylog.git
+          if [ ! -d "$DEP_DIR" ]; then
+            git clone -b "$DEP_REF" "$DEP_URL" "$DEP_DIR"
           else
-            cd greylog
+            cd "$DEP_DIR"
             git fetch origin
-            git checkout ${{ inputs.greylog-branch }}
-            git pull origin ${{ inputs.greylog-branch }}
+            git checkout "$DEP_REF"
+            git pull origin "$DEP_REF"
           fi
-          cd ${{ github.workspace }}
+          cd "${{ github.workspace }}"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4

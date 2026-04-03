@@ -11,7 +11,7 @@ name: Python Allure Report
 #     allure-report:
 #       needs: test
 #       if: always()
-#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-allure-report.yml@main
+#       uses: YOUR_ORG/YOUR_WORKFLOWS_REPO/.github/workflows/python-allure-report.yml@main
 #       with:
 #         allure-results-artifact: 'allure-results'
 #       secrets: inherit

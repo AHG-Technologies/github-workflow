@@ -14,7 +14,7 @@ hardcoded values — so it adapts to any repo without modification:
 
 | Env var | Default | Description |
 |---|---|---|
-| `CI_MARKER` | `ahg-reports` | Unique string for HTML comment delimiters (per-repo, prevents collisions) |
+| `CI_MARKER` | `pr-ci-reports` | Unique string for HTML comment delimiters (per-repo, prevents collisions) |
 | `OVERALL_THRESHOLD` | `45` | Overall coverage gate (display label only; enforcement is in the shell step) |
 | `PR_THRESHOLD` | `90` | PR-file coverage gate (display label only) |
 | `COVERAGE` | — | Overall line coverage % from `coverage.xml` |

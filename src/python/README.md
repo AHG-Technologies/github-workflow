@@ -9,5 +9,5 @@ Scripts used by Python-specific reusable workflows.
 ## Adding a new Python script
 
 1. Drop the `.py` file here.
-2. Reference it in the appropriate `.github/workflows/python-*.yml` workflow via the `.shared-workflows/src/python/<file>` path (the reusable workflow checks out this repo into `.shared-workflows/`).
+2. Reference it in the appropriate `.github/workflows/python-*.yml` workflow via the `.github-workflow/src/python/<file>` path (the reusable workflow checks out this repo into `.github-workflow/` on the runner).
 3. Document it in this table.

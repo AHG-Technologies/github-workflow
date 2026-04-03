@@ -1,0 +1,119 @@
+name: Python Allure Report
+
+# Reusable workflow — Python, language-specific.
+#
+# Downloads raw allure-results from a prior test job, generates the Allure HTML
+# report, and re-uploads it as a named artifact so downstream jobs (e.g.
+# python-pr-coverage) can embed the summary table in the PR description.
+#
+# Caller example:
+#   jobs:
+#     allure-report:
+#       needs: test
+#       if: always()
+#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-allure-report.yml@main
+#       with:
+#         allure-results-artifact: 'allure-results'
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      allure-results-artifact:
+        description: 'Artifact name containing the raw allure-results/ directory'
+        type: string
+        default: 'allure-results'
+      allure-report-artifact:
+        description: 'Artifact name to use when uploading the generated HTML report'
+        type: string
+        default: 'allure-report'
+      allure-version:
+        description: 'Allure CLI version to install'
+        type: string
+        default: '3.3.1'
+      node-version:
+        description: 'Node.js version for the Allure CLI'
+        type: string
+        default: '20'
+      retention-days:
+        description: 'How many days to retain the uploaded report artifact'
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install Allure CLI
+        run: npm install -g allure@${{ inputs.allure-version }}
+
+      - name: Download allure-results artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.allure-results-artifact }}
+          path: allure-results
+        continue-on-error: true   # gracefully skip if test job uploaded nothing
+
+      - name: Generate Allure HTML report
+        id: generate
+        run: |
+          if [ "${{ steps.download.outcome }}" != "success" ]; then
+            echo "::warning::allure-results artifact not found — skipping Allure report generation."
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
+            echo "::warning::allure-results directory is empty — skipping Allure report generation."
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          rm -rf allure-report
+          allure generate allure-results --output allure-report
+          echo "generated=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Allure HTML report artifact
+        if: steps.generate.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.allure-report-artifact }}
+          path: allure-report/
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Print test summary from Allure
+        if: steps.generate.outputs.generated == 'true'
+        run: |
+          SUMMARY="allure-report/widgets/summary.json"
+          if [ -f "$SUMMARY" ]; then
+            echo "### Allure Test Summary" >> "$GITHUB_STEP_SUMMARY"
+            python3 - <<'EOF'
+          import json, os, sys
+          with open("allure-report/widgets/summary.json") as f:
+              d = json.load(f)
+          stats = d.get("statistic", {})
+          passed  = stats.get("passed", 0)
+          failed  = stats.get("failed", 0)
+          broken  = stats.get("broken", 0)
+          skipped = stats.get("skipped", 0)
+          total   = stats.get("total", 0)
+          duration_ms = d.get("time", {}).get("duration", 0) or 0
+          duration_s  = duration_ms / 1000
+          lines = [
+              f"| Passed | Failed | Broken | Skipped | Total | Duration |",
+              f"|--------|--------|--------|---------|-------|----------|",
+              f"| ✅ {passed} | ❌ {failed} | ⚠️ {broken} | ⏭️ {skipped} | {total} | {duration_s:.1f}s |",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n".join(lines) + "\n")
+          EOF
+          fi

@@ -1,0 +1,80 @@
+name: Python Pre-commit Checks
+
+# Reusable workflow — call this from any Python repo that uses uv + pre-commit.
+#
+# Caller example:
+#   jobs:
+#     pre-commit:
+#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-pre-commit.yml@main
+#       with:
+#         python-version: '3.12'
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use (e.g. "3.12")'
+        type: string
+        default: '3.12'
+      uv-version:
+        description: 'uv version to install'
+        type: string
+        default: '0.5.1'
+      clone-greylog:
+        description: 'Whether to clone the private greylog dependency before installing'
+        type: boolean
+        default: true
+      greylog-branch:
+        description: 'Branch of greylog to clone'
+        type: string
+        default: 'main'
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Setup SSH key for private repos
+        if: inputs.clone-greylog
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Clone greylog repository
+        if: inputs.clone-greylog
+        run: |
+          cd ..
+          if [ ! -d "greylog" ]; then
+            git clone -b ${{ inputs.greylog-branch }} git@github.com:AHG-Technologies/greylog.git
+          else
+            cd greylog
+            git fetch origin
+            git checkout ${{ inputs.greylog-branch }}
+            git pull origin ${{ inputs.greylog-branch }}
+          fi
+          cd ${{ github.workspace }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ inputs.uv-version }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run pre-commit hooks
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files

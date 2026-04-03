@@ -1,0 +1,147 @@
+name: Notify Google Chat on PR Approval
+
+# Reusable workflow — language-agnostic.
+# Sends a rich Google Chat card whenever a PR is approved.
+#
+# Required secret (passed via `secrets: inherit`):
+#   GCHAT_APPROVAL_WEBHOOK_URL — Google Chat webhook URL
+#
+# Caller example:
+#   on:
+#     pull_request_review:
+#       types: [submitted]
+#   jobs:
+#     notify:
+#       if: github.event.review.state == 'approved'
+#       uses: AHG-Technologies/shared-workflows/.github/workflows/notify-gchat-on-approval.yml@main
+#       secrets: inherit
+
+on:
+  workflow_call:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Google Chat approval notification
+        uses: actions/github-script@v7
+        env:
+          GCHAT_WEBHOOK_URL: ${{ secrets.GCHAT_APPROVAL_WEBHOOK_URL }}
+        with:
+          script: |
+            const https = require("https");
+
+            if (!process.env.GCHAT_WEBHOOK_URL) {
+              core.warning("GCHAT_APPROVAL_WEBHOOK_URL secret is not set — skipping notification.");
+              return;
+            }
+
+            const review  = context.payload.review;
+            const pr      = context.payload.pull_request;
+            const repo    = context.repo;
+
+            const reviewer   = review.user.login;
+            const prNumber   = pr.number;
+            const prTitle    = pr.title;
+            const prUrl      = pr.html_url;
+            const prAuthor   = pr.user.login;
+            const baseBranch = pr.base.ref;
+            const headBranch = pr.head.ref;
+            const reviewUrl  = review.html_url;
+            const reviewBody = review.body?.trim() || "_No comment left._";
+
+            const payload = {
+              cards: [{
+                header: {
+                  title: "👍 PR Approved",
+                  subtitle: `${repo.owner}/${repo.repo}  •  ${headBranch} → ${baseBranch}`,
+                  imageUrl: "https://avatars.githubusercontent.com/" + reviewer,
+                  imageStyle: "AVATAR",
+                },
+                sections: [
+                  {
+                    widgets: [
+                      {
+                        textParagraph: {
+                          text: `<b>#${prNumber} — ${prTitle}</b>`,
+                        },
+                      },
+                      {
+                        keyValue: {
+                          topLabel: "PR Author",
+                          content: prAuthor,
+                          icon: "PERSON",
+                        },
+                      },
+                      {
+                        keyValue: {
+                          topLabel: "Approved by",
+                          content: reviewer,
+                          icon: "PERSON",
+                        },
+                      },
+                      {
+                        keyValue: {
+                          topLabel: "Review comment",
+                          content: reviewBody,
+                          icon: "DESCRIPTION",
+                        },
+                      },
+                    ],
+                  },
+                  {
+                    widgets: [
+                      {
+                        buttons: [
+                          {
+                            textButton: {
+                              text: "View Pull Request",
+                              onClick: { openLink: { url: prUrl } },
+                            },
+                          },
+                          {
+                            textButton: {
+                              text: "View Review",
+                              onClick: { openLink: { url: reviewUrl } },
+                            },
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              }],
+            };
+
+            const webhookUrl = new URL(process.env.GCHAT_WEBHOOK_URL);
+            const body = JSON.stringify(payload);
+
+            await new Promise((resolve, reject) => {
+              const req = https.request(
+                {
+                  hostname: webhookUrl.hostname,
+                  path: webhookUrl.pathname + webhookUrl.search,
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(body),
+                  },
+                },
+                (res) => {
+                  let data = "";
+                  res.on("data", (chunk) => (data += chunk));
+                  res.on("end", () => {
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                      core.info(`Google Chat notified successfully (${res.statusCode})`);
+                      resolve();
+                    } else {
+                      reject(new Error(`Google Chat webhook returned ${res.statusCode}: ${data}`));
+                    }
+                  });
+                }
+              );
+              req.on("error", reject);
+              req.write(body);
+              req.end();
+            });

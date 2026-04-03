@@ -1,0 +1,104 @@
+name: Python Coverage Badge
+
+# Reusable workflow — Python, language-specific.
+#
+# Downloads coverage.xml from a workflow artifact, extracts the overall line-rate,
+# and updates a GitHub Gist that powers a shields.io coverage badge.
+#
+# Typically called only on push to main/develop (not on PRs).
+#
+# Required secrets (via `secrets: inherit`):
+#   GIST_SECRET — GitHub personal access token with gist write scope
+#   GIST_ID     — ID of the target Gist (found in the Gist URL)
+#
+# Caller example:
+#   jobs:
+#     coverage-badge:
+#       needs: test
+#       if: github.event_name == 'push'
+#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-coverage-badge.yml@main
+#       with:
+#         gist-filename: 'voiceai-coverage.json'   # unique per repo
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      coverage-artifact-name:
+        description: 'Artifact name that contains coverage.xml'
+        type: string
+        default: 'coverage-report'
+      gist-filename:
+        description: >
+          Filename inside the Gist to update.
+          Use a unique name per repo so one Gist can host multiple badges.
+          e.g. "voiceai-coverage.json", "telephony-coverage.json"
+        type: string
+        default: 'coverage.json'
+      label:
+        description: 'Badge label text (left side)'
+        type: string
+        default: 'coverage'
+
+permissions:
+  contents: read
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download coverage artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.coverage-artifact-name }}
+        continue-on-error: true
+
+      - name: Extract coverage percentage
+        id: metrics
+        run: |
+          if [ "${{ steps.download.outcome }}" != "success" ]; then
+            echo "::warning::Coverage artifact not found — skipping badge update."
+            exit 0
+          fi
+          if [ ! -f coverage.xml ]; then
+            echo "::warning::coverage.xml not found inside artifact — skipping badge update."
+            exit 0
+          fi
+          COV=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          t = ET.parse('coverage.xml')
+          r = float(t.getroot().attrib.get('line-rate', 0))
+          print(f'{r * 100:.0f}')
+          ")
+          echo "coverage=$COV" >> "$GITHUB_OUTPUT"
+          echo "Coverage: ${COV}%"
+
+      - name: Update Gist badge
+        if: steps.metrics.outputs.coverage != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GIST_SECRET }}
+          script: |
+            const coverage = "${{ steps.metrics.outputs.coverage }}";
+            const pct      = parseInt(coverage, 10);
+            const color    = pct >= 80 ? "brightgreen"
+                           : pct >= 60 ? "yellow"
+                           : pct >= 20 ? "orange"
+                           : "red";
+            const content = JSON.stringify(
+              {
+                schemaVersion: 1,
+                label: "${{ inputs.label }}",
+                message: `${coverage}%`,
+                color,
+              },
+              null,
+              2
+            );
+            await github.rest.gists.update({
+              gist_id: "${{ secrets.GIST_ID }}",
+              files: { "${{ inputs.gist-filename }}": { content } },
+            });
+            core.info(`Badge updated → ${coverage}% (${color}) in ${{ inputs.gist-filename }}`);

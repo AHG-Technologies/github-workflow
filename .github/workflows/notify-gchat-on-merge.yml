@@ -1,0 +1,148 @@
+name: Notify Google Chat on PR Merge
+
+# Reusable workflow — language-agnostic.
+# Sends a rich Google Chat card whenever a PR is merged.
+# Also supports manual `workflow_dispatch` for testing.
+#
+# Required secret (passed via `secrets: inherit`):
+#   GCHAT_WEBHOOK_URL — Google Chat webhook URL
+#
+# Caller example:
+#   on:
+#     pull_request:
+#       types: [closed]
+#       branches: [main, develop]
+#     workflow_dispatch:
+#       inputs:
+#         pr_title: ...
+#   jobs:
+#     notify:
+#       if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+#       uses: AHG-Technologies/shared-workflows/.github/workflows/notify-gchat-on-merge.yml@main
+#       secrets: inherit
+
+on:
+  workflow_call:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Google Chat notification
+        uses: actions/github-script@v7
+        env:
+          GCHAT_WEBHOOK_URL: ${{ secrets.GCHAT_WEBHOOK_URL }}
+        with:
+          script: |
+            const https = require("https");
+
+            if (!process.env.GCHAT_WEBHOOK_URL) {
+              core.warning("GCHAT_WEBHOOK_URL secret is not set — skipping notification.");
+              return;
+            }
+
+            const isManual = context.eventName === "workflow_dispatch";
+            const pr     = context.payload.pull_request;
+            const repo   = context.repo;
+            const inputs = context.payload.inputs || {};
+
+            const prNumber   = isManual ? (inputs.pr_number   ?? "0")                   : pr.number;
+            const prTitle    = isManual ? (inputs.pr_title    ?? "Test PR notification") : pr.title;
+            const prUrl      = isManual ? `https://github.com/${repo.owner}/${repo.repo}/pulls` : pr.html_url;
+            const author     = isManual ? (inputs.author      ?? "test-user")            : pr.user.login;
+            const mergedBy   = isManual ? (inputs.author      ?? "test-user")            : (pr.merged_by?.login ?? author);
+            const baseBranch = isManual ? (inputs.base_branch ?? "develop")              : pr.base.ref;
+            const headBranch = isManual ? (inputs.head_branch ?? "feature/test-branch")  : pr.head.ref;
+            const additions  = isManual ? 0 : (pr.additions ?? 0);
+            const deletions  = isManual ? 0 : (pr.deletions ?? 0);
+            const filesChanged = isManual ? 0 : (pr.changed_files ?? 0);
+
+            const payload = {
+              cards: [{
+                header: {
+                  title: "✅ PR Merged",
+                  subtitle: `${repo.owner}/${repo.repo}  •  ${headBranch} → ${baseBranch}`,
+                  imageUrl: "https://avatars.githubusercontent.com/" + author,
+                  imageStyle: "AVATAR",
+                },
+                sections: [
+                  {
+                    widgets: [
+                      {
+                        textParagraph: {
+                          text: `<b>#${prNumber} — ${prTitle}</b>`,
+                        },
+                      },
+                      {
+                        keyValue: {
+                          topLabel: "Author",
+                          content: author,
+                          icon: "PERSON",
+                        },
+                      },
+                      {
+                        keyValue: {
+                          topLabel: "Merged by",
+                          content: mergedBy,
+                          icon: "PERSON",
+                        },
+                      },
+                      {
+                        keyValue: {
+                          topLabel: "Changes",
+                          content: `${filesChanged} file(s)   +${additions} / -${deletions}`,
+                          icon: "DESCRIPTION",
+                        },
+                      },
+                    ],
+                  },
+                  {
+                    widgets: [
+                      {
+                        buttons: [
+                          {
+                            textButton: {
+                              text: "View Pull Request",
+                              onClick: { openLink: { url: prUrl } },
+                            },
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              }],
+            };
+
+            const webhookUrl = new URL(process.env.GCHAT_WEBHOOK_URL);
+            const body = JSON.stringify(payload);
+
+            await new Promise((resolve, reject) => {
+              const req = https.request(
+                {
+                  hostname: webhookUrl.hostname,
+                  path: webhookUrl.pathname + webhookUrl.search,
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(body),
+                  },
+                },
+                (res) => {
+                  let data = "";
+                  res.on("data", (chunk) => (data += chunk));
+                  res.on("end", () => {
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                      core.info(`Google Chat notified successfully (${res.statusCode})`);
+                      resolve();
+                    } else {
+                      reject(new Error(`Google Chat webhook returned ${res.statusCode}: ${data}`));
+                    }
+                  });
+                }
+              );
+              req.on("error", reject);
+              req.write(body);
+              req.end();
+            });

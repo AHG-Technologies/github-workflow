@@ -1,0 +1,178 @@
+name: Python PR Coverage Report
+
+# Reusable workflow — Python, language-specific.
+#
+# Downloads coverage.xml (and optionally an Allure HTML report) from workflow
+# artifacts, calculates PR-scoped + overall coverage, updates the PR description,
+# and enforces configurable thresholds.
+#
+# Scripts (pr_coverage.py, update-pr-ci-reports.js) are fetched directly from
+# this shared-workflows repo — no scripts need to exist in the calling repo.
+#
+# Caller example:
+#   jobs:
+#     pr-coverage:
+#       needs: [test, allure-report]   # add allure-report if using Allure
+#       if: github.event_name == 'pull_request'
+#       uses: AHG-Technologies/shared-workflows/.github/workflows/python-pr-coverage.yml@main
+#       with:
+#         ci-marker: 'voiceai-reports'          # unique per repo → unique HTML comment block
+#         pr-coverage-threshold: 90
+#         overall-coverage-threshold: 45
+#         allure-report-artifact: 'allure-report'   # omit if not using Allure
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      ci-marker:
+        description: >
+          Unique identifier used in the HTML comment delimiters written to the PR body.
+          Use a different value per repo so each repo has its own independent block
+          (e.g. "voiceai-reports", "telephony-middleware-reports").
+        type: string
+        default: 'ahg-reports'
+      pr-coverage-threshold:
+        description: 'Minimum coverage % required for PR-changed files (0 = disabled)'
+        type: number
+        default: 90
+      overall-coverage-threshold:
+        description: 'Minimum overall coverage % required (0 = disabled)'
+        type: number
+        default: 45
+      coverage-artifact-name:
+        description: 'Artifact name that contains coverage.xml'
+        type: string
+        default: 'coverage-report'
+      allure-report-artifact:
+        description: 'Artifact name for the Allure HTML report (leave empty to skip)'
+        type: string
+        default: ''
+      python-version:
+        description: 'Python version used to run pr_coverage.py'
+        type: string
+        default: '3.12'
+      shared-workflows-ref:
+        description: 'Branch/tag of shared-workflows to use for scripts'
+        type: string
+        default: 'main'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      # Fetch the shared scripts via SSH (same key used for greylog).
+      # The scripts live in this repo so callers never need their own copies.
+      - name: Checkout shared-workflows (scripts only)
+        uses: actions/checkout@v4
+        with:
+          repository: AHG-Technologies/shared-workflows
+          ref: ${{ inputs.shared-workflows-ref }}
+          path: .shared-workflows
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.coverage-artifact-name }}
+
+      - name: Download Allure report artifact
+        if: inputs.allure-report-artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.allure-report-artifact }}
+          path: allure-report
+        continue-on-error: true   # don't fail if Allure wasn't generated
+
+      - name: Get PR changed Python files
+        id: pr_files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files \
+            --paginate --jq '.[] | select(.filename | endswith(".py")) | .filename' \
+            | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Changed Python files: $FILES"
+
+      - name: Calculate PR-specific coverage
+        id: pr_metrics
+        env:
+          PR_FILES: ${{ steps.pr_files.outputs.files }}
+        run: python3 .shared-workflows/src/python/pr_coverage.py
+
+      - name: Extract overall coverage
+        id: overall
+        run: |
+          if [ -f coverage.xml ]; then
+            COV=$(python3 -c "import xml.etree.ElementTree as ET; t=ET.parse('coverage.xml'); r=float(t.getroot().attrib.get('line-rate', 0)); print(f'{r * 100:.0f}')")
+            echo "coverage=$COV" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update PR description with coverage report
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          CI_MARKER: ${{ inputs.ci-marker }}
+          OVERALL_THRESHOLD: ${{ inputs.overall-coverage-threshold }}
+          PR_THRESHOLD: ${{ inputs.pr-coverage-threshold }}
+          COVERAGE: ${{ steps.overall.outputs.coverage }}
+          PR_COVERAGE: ${{ steps.pr_metrics.outputs.pr_coverage }}
+          PR_MATCHED_FILES: ${{ steps.pr_metrics.outputs.matched_files }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const path = require('path');
+            const { run } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.shared-workflows/src/common/update-pr-ci-reports.js')
+            );
+            await run({ github, context, core });
+
+      - name: Enforce PR coverage threshold
+        run: |
+          PR_COVERAGE="${{ steps.pr_metrics.outputs.pr_coverage }}"
+          MATCHED_FILES="${{ steps.pr_metrics.outputs.matched_files }}"
+          THRESHOLD="${{ inputs.pr-coverage-threshold }}"
+          if [ "$THRESHOLD" -eq 0 ]; then
+            echo "PR coverage threshold disabled — skipping."
+            exit 0
+          fi
+          if [ -z "$PR_COVERAGE" ] || [ "${MATCHED_FILES:-0}" -eq 0 ]; then
+            echo "No PR files tracked by coverage.xml — skipping PR coverage threshold check."
+            exit 0
+          fi
+          echo "PR-specific coverage: ${PR_COVERAGE}%  (threshold: ${THRESHOLD}%)"
+          if [ "$PR_COVERAGE" -lt "$THRESHOLD" ]; then
+            echo "::error::PR coverage ${PR_COVERAGE}% is below the required ${THRESHOLD}% threshold. PR cannot be merged."
+            exit 1
+          fi
+          echo "PR coverage ${PR_COVERAGE}% meets the required ${THRESHOLD}% threshold."
+
+      - name: Enforce overall coverage threshold
+        run: |
+          COVERAGE="${{ steps.overall.outputs.coverage }}"
+          THRESHOLD="${{ inputs.overall-coverage-threshold }}"
+          if [ "$THRESHOLD" -eq 0 ]; then
+            echo "Overall coverage threshold disabled — skipping."
+            exit 0
+          fi
+          if [ -z "$COVERAGE" ]; then
+            echo "::error::coverage.xml not found. Cannot verify coverage threshold."
+            exit 1
+          fi
+          echo "Overall coverage: ${COVERAGE}%  (threshold: ${THRESHOLD}%)"
+          if [ "$COVERAGE" -lt "$THRESHOLD" ]; then
+            echo "::error::Overall coverage ${COVERAGE}% is below the required ${THRESHOLD}% threshold. PR cannot be merged."
+            exit 1
+          fi
+          echo "Overall coverage ${COVERAGE}% meets the required ${THRESHOLD}% threshold."

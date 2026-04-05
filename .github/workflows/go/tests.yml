@@ -1,0 +1,243 @@
+name: Go Tests
+
+on:
+  pull_request:
+    # Runs on every commit pushed to a PR (opened, synchronized, reopened)
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Build
+        run: go build ./cmd/controller
+
+      - name: Run tests
+        run: go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Generate coverage report
+        id: coverage
+        if: always()
+        run: |
+          COVERAGE_OUTPUT=$(go tool cover -func=coverage.out)
+          echo "$COVERAGE_OUTPUT"
+
+          TOTAL=$(echo "$COVERAGE_OUTPUT" | grep '^total:' | awk '{print $NF}')
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+
+          COVERAGE_NUM=$(echo "$TOTAL" | sed 's/%//')
+          echo "coverage_num=$COVERAGE_NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Get PR changed Go files
+        id: pr_files
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files \
+            --paginate --jq '.[] | select(.filename | endswith(".go")) | select(.filename | test("_test\\.go$") | not) | .filename' \
+            | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Changed Go files: $FILES"
+
+      - name: Calculate PR-specific coverage
+        id: pr_coverage
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          PR_FILES="${{ steps.pr_files.outputs.files }}"
+          if [ -z "$PR_FILES" ]; then
+            echo "pr_total=N/A" >> "$GITHUB_OUTPUT"
+            echo "pr_detail=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          MODULE=$(head -1 go.mod | awk '{print $2}')
+          FUNC_OUTPUT=$(go tool cover -func=coverage.out)
+          MATCHED_LINES=""
+
+          for f in $PR_FILES; do
+            FULL_PATH="${MODULE}/${f}"
+            LINE=$(echo "$FUNC_OUTPUT" | grep "^${FULL_PATH}:" || true)
+            if [ -n "$LINE" ]; then
+              MATCHED_LINES="$MATCHED_LINES$LINE
+          "
+            fi
+          done
+
+          if [ -z "$MATCHED_LINES" ]; then
+            echo "pr_total=N/A" >> "$GITHUB_OUTPUT"
+            echo "pr_detail=" >> "$GITHUB_OUTPUT"
+          else
+            PR_FILE_SUMMARY=""
+            MATCHED_COUNT=0
+            for f in $PR_FILES; do
+              FULL_PATH="${MODULE}/${f}"
+              FILE_LINES=$(echo "$FUNC_OUTPUT" | grep "^${FULL_PATH}:" || true)
+              if [ -n "$FILE_LINES" ]; then
+                FILE_COV=$(echo "$FILE_LINES" | awk '{gsub(/%/,"",$NF); sum+=$NF; n++} END {if(n>0) printf "%.1f%%", sum/n; else print "N/A"}')
+                PR_FILE_SUMMARY="$PR_FILE_SUMMARY| \`$f\` | $FILE_COV |
+          "
+                MATCHED_COUNT=$((MATCHED_COUNT + 1))
+              fi
+            done
+
+            echo "matched_files=$MATCHED_COUNT" >> "$GITHUB_OUTPUT"
+
+            OVERALL=$(echo "$MATCHED_LINES" | awk '{gsub(/%/,"",$NF); sum+=$NF; n++} END {if(n>0) printf "%.1f%%", sum/n; else print "N/A"}')
+            echo "pr_total=$OVERALL" >> "$GITHUB_OUTPUT"
+
+            OVERALL_NUM=$(echo "$OVERALL" | sed 's/%//')
+            echo "pr_total_num=$OVERALL_NUM" >> "$GITHUB_OUTPUT"
+
+            {
+              echo 'pr_detail<<EOF'
+              echo "$PR_FILE_SUMMARY"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update PR description with coverage
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          TOTAL_COVERAGE: ${{ steps.coverage.outputs.total }}
+          TOTAL_COVERAGE_NUM: ${{ steps.coverage.outputs.coverage_num }}
+          PR_COVERAGE: ${{ steps.pr_coverage.outputs.pr_total }}
+          PR_COVERAGE_NUM: ${{ steps.pr_coverage.outputs.pr_total_num }}
+          PR_DETAIL: ${{ steps.pr_coverage.outputs.pr_detail }}
+          MATCHED_FILES: ${{ steps.pr_coverage.outputs.matched_files }}
+          OVERALL_THRESHOLD: '10'
+          PR_THRESHOLD: '0'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+
+            const BAR_LEN = 20;
+            function progressBar(pct) {
+              const filled = Math.round((pct / 100) * BAR_LEN);
+              return '█'.repeat(filled) + '░'.repeat(BAR_LEN - filled);
+            }
+            function resultEmoji(pct, threshold) {
+              if (pct >= threshold) return '🟢';
+              if (pct >= threshold * 0.75) return '🟠';
+              return '🔴';
+            }
+
+            const totalRaw = process.env.TOTAL_COVERAGE || 'N/A';
+            const totalNum = parseFloat(process.env.TOTAL_COVERAGE_NUM);
+            const prRaw = process.env.PR_COVERAGE || 'N/A';
+            const prNum = parseFloat(process.env.PR_COVERAGE_NUM);
+            const prDetail = process.env.PR_DETAIL || '';
+            const matchedFiles = parseInt(process.env.MATCHED_FILES || '0', 10);
+            const overallThreshold = parseInt(process.env.OVERALL_THRESHOLD, 10);
+            const prThreshold = parseInt(process.env.PR_THRESHOLD, 0);
+
+            let s = `## CI reports (auto-updated)\n`;
+            s += `> This section is maintained by GitHub Actions.\n\n`;
+            s += `### Coverage\n\n`;
+            s += `| Scope | Result | Progress | Threshold |\n`;
+            s += `|-------|--------|----------|-----------|\n`;
+
+            if (!isNaN(totalNum)) {
+              const emoji = resultEmoji(totalNum, overallThreshold);
+              const pass = totalNum >= overallThreshold ? '✅' : '❌';
+              s += `| Overall | ${emoji} ${totalRaw} | \`${progressBar(totalNum)}\` | ${pass} ≥ ${overallThreshold}% |\n`;
+            } else {
+              s += `| Overall | ➖ N/A | \`${'─'.repeat(BAR_LEN)}\` | No coverage data available |\n`;
+            }
+
+            if (!isNaN(prNum) && matchedFiles > 0) {
+              const emoji = resultEmoji(prNum, prThreshold);
+              const pass = prNum >= prThreshold ? '✅' : '❌';
+              s += `| PR files | ${emoji} ${prRaw} | \`${progressBar(prNum)}\` | ${pass} ≥ ${prThreshold}% |\n`;
+            } else {
+              s += `| PR files | ➖ N/A | \`${'─'.repeat(BAR_LEN)}\` | No changed files tracked by coverage |\n`;
+            }
+
+            if (prDetail.trim()) {
+              s += `\n<details>\n<summary>📂 Changed file coverage breakdown</summary>\n\n`;
+              s += `| File | Coverage |\n|------|----------|\n`;
+              s += prDetail;
+              s += `\n</details>\n`;
+            }
+
+            const marker = '<!-- ci-coverage-report -->';
+            const block = `${marker}\n${s}\n${marker}`;
+
+            let body = pr.body || '';
+            const regex = new RegExp(`${marker}[\\s\\S]*?${marker}`, 'g');
+            if (regex.test(body)) {
+              body = body.replace(regex, block);
+            } else {
+              body = body.trimEnd() + '\n\n---\n\n' + block;
+            }
+
+            await github.rest.pulls.update({ owner, repo, pull_number: prNumber, body });
+            core.info(`PR #${prNumber} description updated with coverage report.`);
+
+      - name: Enforce PR coverage threshold (0%)
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          PR_COVERAGE="${{ steps.pr_coverage.outputs.pr_total_num }}"
+          MATCHED_FILES="${{ steps.pr_coverage.outputs.matched_files }}"
+          if [ -z "$PR_COVERAGE" ] || [ "$PR_COVERAGE" = "N/A" ] || [ "${MATCHED_FILES:-0}" -eq 0 ]; then
+            echo "No PR files tracked by coverage — skipping PR coverage threshold check."
+            exit 0
+          fi
+          echo "PR-specific coverage: ${PR_COVERAGE}%"
+          if [ "$(echo "$PR_COVERAGE < 0" | bc -l)" -eq 1 ]; then
+            echo "::error::PR coverage ${PR_COVERAGE}% is below the required 0% threshold for changed files. PR cannot be merged."
+            exit 1
+          fi
+          echo "PR coverage ${PR_COVERAGE}% meets the required 0% threshold."
+
+      - name: Enforce coverage threshold (10%)
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          COVERAGE="${{ steps.coverage.outputs.coverage_num }}"
+          if [ -z "$COVERAGE" ] || [ "$COVERAGE" = "N/A" ]; then
+            echo "::warning::Coverage report not found or not available. Skipping threshold check."
+            exit 0
+          fi
+          echo "Current coverage: ${COVERAGE}%"
+          if [ "$(echo "$COVERAGE < 10" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below the required 10% threshold. PR cannot be merged."
+            exit 1
+          fi
+          echo "Coverage ${COVERAGE}% meets the required 10% threshold."
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          if-no-files-found: warn
+          retention-days: 5

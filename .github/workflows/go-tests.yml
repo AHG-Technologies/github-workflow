@@ -29,6 +29,16 @@ on:
         type: string
         required: false
         default: ''
+      workflow-scripts-repository:
+        description: 'Repo that contains shared src/go and src/common scripts (forks: change here)'
+        type: string
+        required: false
+        default: 'AHG-Technologies/github-workflow'
+      workflow-scripts-ref:
+        description: 'Branch or tag to fetch workflow scripts from (should match your uses: ...@ref when possible)'
+        type: string
+        required: false
+        default: 'main'
 
 permissions:
   contents: write
@@ -41,6 +51,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Reusable workflows run in the caller repo; src/go and src/common live in github-workflow.
+      - name: Checkout workflow scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.workflow-scripts-repository || 'AHG-Technologies/github-workflow' }}
+          ref: ${{ inputs.workflow-scripts-ref || 'main' }}
+          path: .github-workflow
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -74,7 +92,7 @@ jobs:
       - name: Generate coverage report
         id: coverage
         if: always()
-        run: bash src/go/coverage-summary.sh
+        run: bash .github-workflow/src/go/coverage-summary.sh
 
       - name: Get PR changed Go files
         id: pr_files
@@ -93,7 +111,7 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         env:
           PR_FILES: ${{ steps.pr_files.outputs.files }}
-        run: bash src/go/pr-specific-coverage.sh
+        run: bash .github-workflow/src/go/pr-specific-coverage.sh
 
       - name: Update PR description with coverage
         if: always() && github.event_name == 'pull_request'
@@ -112,7 +130,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const path = require('path');
-            const { run } = require(path.join(process.env.GITHUB_WORKSPACE, 'src/common/update-pr-ci-reports.js'));
+            const { run } = require(path.join(process.env.GITHUB_WORKSPACE, '.github-workflow/src/common/update-pr-ci-reports.js'));
             await run({ github, context, core });
 
       - name: Enforce PR coverage threshold (0%)
@@ -120,13 +138,13 @@ jobs:
         env:
           PR_COVERAGE: ${{ steps.pr_coverage.outputs.pr_total_num }}
           MATCHED_FILES: ${{ steps.pr_coverage.outputs.matched_files }}
-        run: bash src/go/enforce-pr-coverage-threshold.sh
+        run: bash .github-workflow/src/go/enforce-pr-coverage-threshold.sh
 
       - name: Enforce coverage threshold (0%)
         if: always() && github.event_name == 'pull_request'
         env:
           COVERAGE: ${{ steps.coverage.outputs.coverage_num }}
-        run: bash src/go/enforce-overall-coverage-threshold.sh
+        run: bash .github-workflow/src/go/enforce-overall-coverage-threshold.sh
 
       - name: Upload coverage artifact
         if: always()

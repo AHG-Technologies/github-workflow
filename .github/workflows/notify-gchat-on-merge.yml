@@ -34,6 +34,7 @@ jobs:
         env:
           GCHAT_WEBHOOK_URL: ${{ secrets.GCHAT_WEBHOOK_URL }}
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const https = require("https");
 

@@ -1,0 +1,73 @@
+name: Pre-commit Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+  workflow_call:    
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.24'
+      pre-install-cache-key:          
+        type: string
+        required: false
+        default: ''
+      pre-install-cache-paths:     
+        type: string
+        required: false
+        default: ''
+      pre-install-env:             
+        description: 'Newline-separated KEY=VALUE env vars to set after cache restore'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version || '1.24' }}   # uses caller input or falls back to default
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.0.2
+          args: --help
+
+      - name: Restore pre-installed dependencies  
+        if: inputs.pre-install-cache-key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.pre-install-cache-paths }}
+          key: ${{ inputs.pre-install-cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Set pre-install environment variables   
+        if: inputs.pre-install-env != ''
+        run: echo "${{ inputs.pre-install-env }}" >> $GITHUB_ENV
+
+      - name: Run pre-commit hooks
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files

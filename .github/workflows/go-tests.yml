@@ -1,0 +1,149 @@
+name: Go Tests
+
+on:
+  pull_request:
+    # Runs on every commit pushed to a PR (opened, synchronized, reopened)
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:  # Allow manual triggering
+  workflow_call:    
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.24'
+      pre-install-cache-key:          
+        type: string
+        required: false
+        default: ''
+      pre-install-cache-paths:     
+        type: string
+        required: false
+        default: ''
+      pre-install-env:             
+        description: 'Newline-separated KEY=VALUE env vars to set after cache restore'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Callers only have their app checkout; need full src/common + src/go + src/python for Node require().
+      - name: Checkout workflow scripts (PR reporter)
+        uses: actions/checkout@v4
+        with:
+          repository: AHG-Technologies/github-workflow
+          ref: ${{ github.repository == 'AHG-Technologies/github-workflow' && github.sha || 'patch-go-workflows' }}
+          path: .github-workflow
+
+      - name: Verify PR reporter script
+        run: test -f "$GITHUB_WORKSPACE/.github-workflow/src/common/update-pr-ci-reports.js" || (echo "::error::Missing .github-workflow — ensure AHG-Technologies/github-workflow at ref main (or current SHA in this repo) contains src/common." && ls -la .github-workflow 2>/dev/null; exit 1)
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version || '1.24' }}
+
+      - name: Restore pre-installed dependencies
+        if: inputs.pre-install-cache-key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.pre-install-cache-paths }}
+          key: ${{ inputs.pre-install-cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Set pre-install environment variables
+        if: inputs.pre-install-env != ''
+        run: echo "${{ inputs.pre-install-env }}" >> $GITHUB_ENV
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Build
+        run: go build ./cmd/controller
+
+      - name: Run tests
+        run: go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Generate coverage report
+        id: coverage
+        if: always()
+        run: bash .github-workflow/src/go/coverage-summary.sh
+
+      - name: Get PR changed Go files
+        id: pr_files
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files \
+            --paginate --jq '.[] | select(.filename | endswith(".go")) | select(.filename | test("_test\\.go$") | not) | .filename' \
+            | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Changed Go files: $FILES"
+
+      - name: Calculate PR-specific coverage
+        id: pr_coverage
+        if: always() && github.event_name == 'pull_request'
+        env:
+          PR_FILES: ${{ steps.pr_files.outputs.files }}
+        run: bash .github-workflow/src/go/pr-specific-coverage.sh
+
+      - name: Update PR description with coverage
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          CI_MARKER: go-coverage
+          TOTAL_COVERAGE: ${{ steps.coverage.outputs.total }}
+          TOTAL_COVERAGE_NUM: ${{ steps.coverage.outputs.coverage_num }}
+          PR_COVERAGE: ${{ steps.pr_coverage.outputs.pr_total }}
+          PR_COVERAGE_NUM: ${{ steps.pr_coverage.outputs.pr_total_num }}
+          PR_DETAIL: ${{ steps.pr_coverage.outputs.pr_detail }}
+          MATCHED_FILES: ${{ steps.pr_coverage.outputs.matched_files }}
+          OVERALL_THRESHOLD: '0'
+          PR_THRESHOLD: '0'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const path = require('path');
+            const { run } = require(path.join(process.env.GITHUB_WORKSPACE, '.github-workflow/src/common/update-pr-ci-reports.js'));
+            await run({ github, context, core });
+
+      - name: Enforce PR coverage threshold (0%)
+        if: always() && github.event_name == 'pull_request'
+        env:
+          PR_COVERAGE: ${{ steps.pr_coverage.outputs.pr_total_num }}
+          MATCHED_FILES: ${{ steps.pr_coverage.outputs.matched_files }}
+        run: bash .github-workflow/src/go/enforce-pr-coverage-threshold.sh
+
+      - name: Enforce coverage threshold (0%)
+        if: always() && github.event_name == 'pull_request'
+        env:
+          COVERAGE: ${{ steps.coverage.outputs.coverage_num }}
+        run: bash .github-workflow/src/go/enforce-overall-coverage-threshold.sh
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          if-no-files-found: warn
+          retention-days: 5

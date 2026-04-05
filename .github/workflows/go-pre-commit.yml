@@ -14,6 +14,14 @@ on:
         required: false
         type: string
         default: '1.24'
+      pre-install-cache-key:          
+        type: string
+        required: false
+        default: ''
+      pre-install-cache-paths:     
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -41,6 +49,14 @@ jobs:
         with:
           version: v2.0.2
           args: --help
+
+      - name: Restore pre-installed dependencies  
+        if: inputs.pre-install-cache-key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.pre-install-cache-paths }}
+          key: ${{ inputs.pre-install-cache-key }}
+          fail-on-cache-miss: true
 
       - name: Run pre-commit hooks
         uses: pre-commit/action@v3.0.1

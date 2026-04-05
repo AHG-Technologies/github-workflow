@@ -147,8 +147,9 @@ Use a **unique `gist-filename`** per repo so a single Gist can host multiple bad
 | `coverage-artifact-name` | string | `coverage-report` | Artifact containing `coverage.xml` |
 | `gist-filename` | string | `coverage.json` | File in the Gist to update — **unique per repo** |
 | `label` | string | `coverage` | Badge left-side label text |
+| `update-gist-badge` | boolean | `true` | Set `false` to never update the Gist (coverage is still read from the artifact when present) |
 
-**Required secrets (via `secrets: inherit`):** `GIST_SECRET`, `GIST_ID`
+**Optional secrets (via `secrets: inherit`):** `GIST_SECRET`, `GIST_ID` — if either is missing, the job still succeeds and only logs a warning; the Gist step is skipped.
 
 ```yaml
 jobs:
@@ -229,8 +230,8 @@ Add it to `.github/workflows/` with `on: workflow_call`. Universal workflows con
 | `SSH_PRIVATE_KEY` | `python-pre-commit` | Deploy key with read access to the private dependency repo (when `private-dependency-git-url` is set) |
 | `WORKFLOW_REPO_READ_TOKEN` | _(optional)_ | Only if you customize `python-pr-coverage` to checkout a **private** scripts repo over HTTPS. Public scripts repo: not used. |
 | `GITHUB_TOKEN` | `python-pr-coverage` | Auto-provided; needs `pull-requests: write` on caller |
-| `GIST_SECRET` | `python-coverage-badge` | PAT with `gist` write scope |
-| `GIST_ID` | `python-coverage-badge` | ID from the Gist URL |
+| `GIST_SECRET` | `python-coverage-badge` | Optional. PAT with `gist` write scope — omit to skip Gist updates |
+| `GIST_ID` | `python-coverage-badge` | Optional. ID from the Gist URL — omit to skip Gist updates |
 | `GCHAT_APPROVAL_WEBHOOK_URL` | `notify-gchat-on-approval` | Google Chat space webhook |
 | `GCHAT_WEBHOOK_URL` | `notify-gchat-on-merge` | Google Chat space webhook |
 

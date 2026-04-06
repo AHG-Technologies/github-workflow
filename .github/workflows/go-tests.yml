@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: AHG-Technologies/github-workflow
-          ref: ${{ github.repository == 'AHG-Technologies/github-workflow' && github.sha || 'patch-go-workflows' }}
+          ref: ${{ github.repository == 'AHG-Technologies/github-workflow' && github.sha || 'main' }}
           path: .github-workflow
 
       - name: Verify PR reporter script

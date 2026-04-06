@@ -7,9 +7,9 @@ name: Python Coverage Badge
 #
 # Typically called only on push to main/develop (not on PRs).
 #
-# Required secrets (via `secrets: inherit`):
-#   GIST_SECRET — GitHub personal access token with gist write scope
-#   GIST_ID     — ID of the target Gist (found in the Gist URL)
+# Optional secrets (via `secrets: inherit`):
+#   GIST_SECRET — PAT with gist scope (if missing, Gist update is skipped)
+#   GIST_ID     — target Gist id from the Gist URL (if missing, Gist update is skipped)
 #
 # Caller example:
 #   jobs:
@@ -39,6 +39,10 @@ on:
         description: 'Badge label text (left side)'
         type: string
         default: 'coverage'
+      update-gist-badge:
+        description: 'When false, skip Gist update (coverage is still extracted from the artifact when present)'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -75,8 +79,22 @@ jobs:
           echo "coverage=$COV" >> "$GITHUB_OUTPUT"
           echo "Coverage: ${COV}%"
 
+      - name: Check Gist credentials
+        id: gist_config
+        if: inputs.update-gist-badge == true && steps.metrics.outputs.coverage != ''
+        env:
+          HAVE_SECRET: ${{ secrets.GIST_SECRET != '' }}
+          HAVE_GIST_ID: ${{ secrets.GIST_ID != '' }}
+        run: |
+          if [ "$HAVE_SECRET" = "true" ] && [ "$HAVE_GIST_ID" = "true" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::GIST_SECRET and/or GIST_ID not set — skipping Gist badge update."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Update Gist badge
-        if: steps.metrics.outputs.coverage != ''
+        if: inputs.update-gist-badge == true && steps.metrics.outputs.coverage != '' && steps.gist_config.outputs.configured == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GIST_SECRET }}

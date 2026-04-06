@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: '1.24'
+      go-lint-version:
+        description: 'Go lint version to use'
+        required: false
+        type: string
+        default: 'v2.0.2'
       pre-install-cache-key:          
         type: string
         required: false
@@ -46,7 +51,7 @@ jobs:
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.0.2
+          version: ${{ inputs.go-lint-version || 'v2.0.2' }}
           args: --help
 
       - name: Restore pre-installed dependencies  
